@@ -1,0 +1,21 @@
+databases:
+  - name: attendance-db
+    plan: basic-256mb        # paid; the free Postgres plan expires after 30 days
+    databaseName: attendance
+    user: attendance
+
+services:
+  - type: web
+    name: attendance-hub
+    runtime: python
+    plan: starter            # always-on; free web services sleep after 15 min
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: DATABASE_URL
+        fromDatabase:
+          name: attendance-db
+          property: connectionString
