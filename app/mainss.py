@@ -1,6 +1,6 @@
-import hashlib, io, json, uuid
+import hashlib, io, json, os, uuid
+from pathlib import Path
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -11,6 +11,9 @@ from .db import engine, get_db
 from .models import AttendanceRecord, Base, Course, Office, Student
 
 Base.metadata.create_all(engine)
+# NOTE: Render's disk is ephemeral. Point PHOTO_DIR at a persistent disk, or swap save_photo() for S3/Cloudinary.
+PHOTO_DIR = Path(os.getenv("PHOTO_DIR", "photos"))
+PHOTO_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Attendance Hub")
 
@@ -28,18 +31,15 @@ def require_key(x_api_key: str = Header(...), db: Session = Depends(get_db)) -> 
 def norm(matric: str) -> str:
     return matric.strip().upper()
 
-def read_photo(file: UploadFile) -> bytes:
+def save_photo(file: UploadFile) -> str:
     try:
         img = Image.open(io.BytesIO(file.file.read())).convert("RGB")
     except Exception:
         raise HTTPException(400, "Photo is not a valid image")
     img.thumbnail((500, 500))
-    out = io.BytesIO()
-    img.save(out, "JPEG", quality=85)   # ~30-60 KB per student, stored in the database
-    return out.getvalue()
-
-def set_photo(s: Student, file: UploadFile):
-    s.photo_data, s.photo_path = read_photo(file), uuid.uuid4().hex
+    name = f"{uuid.uuid4().hex}.jpg"
+    img.save(PHOTO_DIR / name, "JPEG", quality=85)
+    return name
 
 def student_out(s: Student, with_records=False) -> dict:
     out = {"matric_number": s.matric_number, "full_name": s.full_name, "department": s.department,
@@ -78,9 +78,8 @@ def register_student(matric_number: str = Form(...), full_name: str = Form(...),
     if db.scalar(select(Student).where(Student.matric_number == matric)):
         raise HTTPException(409, f"{matric} is already registered")
     s = Student(matric_number=matric, full_name=full_name.strip(), department=department, level=level,
-                email=email, phone=phone, extra=parse_extra(extra))
-    if photo and photo.filename:
-        set_photo(s, photo)
+                email=email, phone=phone, extra=parse_extra(extra),
+                photo_path=save_photo(photo) if photo and photo.filename else None)
     db.add(s); db.commit()
     return student_out(s)
 
@@ -113,17 +112,9 @@ def update_student(matric: str, full_name: str = Form(None), department: str = F
     if extra:
         s.extra = {**(s.extra or {}), **parse_extra(extra)}
     if photo and photo.filename:
-        set_photo(s, photo)
+        s.photo_path = save_photo(photo)
     db.commit()
     return student_out(s, with_records=True)
-
-# Photo URLs use a random token (unguessable), so <img> tags work without sending the API key.
-@app.get("/photos/{token}")
-def photo(token: str, db: Session = Depends(get_db)):
-    s = db.scalar(select(Student).where(Student.photo_path == token))
-    if not s or not s.photo_data:
-        raise HTTPException(404, "Photo not found")
-    return Response(s.photo_data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 # ---------- attendance upload (called by the desktop software) ----------
 class Row(BaseModel):
@@ -165,4 +156,5 @@ def upload_attendance(p: Upload, db: Session = Depends(get_db), _=Depends(requir
     return {"course": code, "semester": sem, "matched": matched,
             "unmatched_ids": unmatched, "exceeds_total": flagged}
 
+app.mount("/photos", StaticFiles(directory=PHOTO_DIR), name="photos")
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

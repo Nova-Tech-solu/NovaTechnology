@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Integer, ForeignKey, JSON, DateTime, LargeBinary, UniqueConstraint
+from sqlalchemy import String, Integer, ForeignKey, JSON, DateTime, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 class Base(DeclarativeBase):
@@ -21,8 +21,7 @@ class Student(Base):
     level: Mapped[str | None] = mapped_column(String(20))
     email: Mapped[str | None] = mapped_column(String(200))
     phone: Mapped[str | None] = mapped_column(String(40))
-    photo_path: Mapped[str | None] = mapped_column(String(64), unique=True)  # random token used in the photo URL
-    photo_data: Mapped[bytes | None] = mapped_column(LargeBinary)          # resized JPEG stored in the database
+    photo_path: Mapped[str | None] = mapped_column(String(300))
     extra: Mapped[dict] = mapped_column(JSON, default=dict)  # any extra details, no migration needed
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     records: Mapped[list["AttendanceRecord"]] = relationship(back_populates="student", cascade="all, delete-orphan")
